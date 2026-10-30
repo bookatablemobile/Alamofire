@@ -1,7 +1,7 @@
 //
 //  DownloadTests.swift
 //
-//  Copyright (c) 2014-2016 Alamofire Software Foundation (http://alamofire.org/)
+//  Copyright (c) 2014-2018 Alamofire Software Foundation (http://alamofire.org/)
 //
 //  Permission is hereby granted, free of charge, to any person obtaining a copy
 //  of this software and associated documentation files (the "Software"), to deal
@@ -26,72 +26,89 @@ import Alamofire
 import Foundation
 import XCTest
 
-class DownloadInitializationTestCase: BaseTestCase {
+final class DownloadInitializationTests: BaseTestCase {
+    @MainActor
     func testDownloadClassMethodWithMethodURLAndDestination() {
         // Given
-        let urlString = "https://httpbin.org/"
+        let session = stored(Session())
+        let endpoint = Endpoint.get
+        let expectation = expectation(description: "download should complete")
 
         // When
-        let request = Alamofire.download(urlString)
+        let request = session.download(endpoint).response { _ in
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: timeout)
 
         // Then
         XCTAssertNotNil(request.request)
         XCTAssertEqual(request.request?.httpMethod, "GET")
-        XCTAssertEqual(request.request?.url?.absoluteString, urlString)
-        XCTAssertNil(request.response)
+        XCTAssertEqual(request.request?.url, endpoint.url)
+        XCTAssertNotNil(request.response)
     }
 
+    @MainActor
     func testDownloadClassMethodWithMethodURLHeadersAndDestination() {
         // Given
-        let urlString = "https://httpbin.org/"
-        let headers = ["Authorization": "123456"]
+        let session = stored(Session())
+        let endpoint = Endpoint.get
+        let headers: HTTPHeaders = ["Authorization": "123456"]
+        let expectation = expectation(description: "download should complete")
 
         // When
-        let request = Alamofire.download(urlString, headers: headers)
+        let request = session.download(endpoint, headers: headers).response { _ in
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: timeout)
 
         // Then
         XCTAssertNotNil(request.request)
         XCTAssertEqual(request.request?.httpMethod, "GET")
-        XCTAssertEqual(request.request?.url?.absoluteString, urlString)
-        XCTAssertEqual(request.request?.value(forHTTPHeaderField: "Authorization"), "123456")
-        XCTAssertNil(request.response)
+        XCTAssertEqual(request.request?.url, endpoint.url)
+        XCTAssertEqual(request.request?.headers["Authorization"], "123456")
+        XCTAssertNotNil(request.response)
     }
 }
 
 // MARK: -
 
-class DownloadResponseTestCase: BaseTestCase {
+final class DownloadResponseTests: BaseTestCase {
     private var randomCachesFileURL: URL {
-        return testDirectoryURL.appendingPathComponent("\(UUID().uuidString).json")
+        testDirectoryURL.appendingPathComponent("\(UUID().uuidString).json")
     }
 
+    @MainActor
     func testDownloadRequest() {
         // Given
+        let session = stored(Session())
         let fileURL = randomCachesFileURL
         let numberOfLines = 100
-        let urlString = "https://httpbin.org/stream/\(numberOfLines)"
-        let destination: DownloadRequest.DownloadFileDestination = { _, _ in (fileURL, []) }
+        let endpoint = Endpoint.stream(numberOfLines)
+        let destination: DownloadRequest.Destination = { _, _ in (fileURL, []) }
 
-        let expectation = self.expectation(description: "Download request should download data to file: \(urlString)")
-        var response: DefaultDownloadResponse?
+        let expectation = expectation(description: "Download request should download data to file: \(endpoint.url.absoluteString)")
+        var response: DownloadResponse<URL, AFError>?
 
         // When
-        Alamofire.download(urlString, to: destination)
-            .response { resp in
+        session.download(endpoint, to: destination)
+            .validate()
+            .responseURL { resp in
                 response = resp
                 expectation.fulfill()
             }
 
-        waitForExpectations(timeout: timeout, handler: nil)
+        waitForExpectations(timeout: timeout)
 
         // Then
         XCTAssertNotNil(response?.request)
         XCTAssertNotNil(response?.response)
-        XCTAssertNotNil(response?.destinationURL)
+        XCTAssertNotNil(response?.fileURL)
         XCTAssertNil(response?.resumeData)
         XCTAssertNil(response?.error)
 
-        if let destinationURL = response?.destinationURL {
+        if let destinationURL = response?.fileURL {
             XCTAssertTrue(FileManager.default.fileExists(atPath: destinationURL.path))
 
             if let data = try? Data(contentsOf: destinationURL) {
@@ -102,50 +119,16 @@ class DownloadResponseTestCase: BaseTestCase {
         }
     }
 
-    func testCancelledDownloadRequest() {
+    @MainActor
+    func testDownloadRequestResponseURLProducesURL() throws {
         // Given
-        let fileURL = randomCachesFileURL
-        let numberOfLines = 100
-        let urlString = "https://httpbin.org/stream/\(numberOfLines)"
-        let destination: DownloadRequest.DownloadFileDestination = { _, _ in (fileURL, []) }
-
-        let expectation = self.expectation(description: "Cancelled download request should not download data to file")
-        var response: DefaultDownloadResponse?
+        let session = stored(Session())
+        let expectation = expectation(description: "Download request should download data")
+        var response: DownloadResponse<URL, AFError>?
 
         // When
-        Alamofire.download(urlString, to: destination)
-            .response { resp in
-                response = resp
-                expectation.fulfill()
-            }
-            .cancel()
-
-        waitForExpectations(timeout: timeout, handler: nil)
-
-        // Then
-        XCTAssertNotNil(response?.request)
-        XCTAssertNil(response?.response)
-        XCTAssertNil(response?.destinationURL)
-        XCTAssertNil(response?.resumeData)
-        XCTAssertNotNil(response?.error)
-    }
-
-    func testDownloadRequestWithProgress() {
-        // Given
-        let randomBytes = 4 * 1024 * 1024
-        let urlString = "https://httpbin.org/bytes/\(randomBytes)"
-
-        let expectation = self.expectation(description: "Bytes download progress should be reported: \(urlString)")
-
-        var progressValues: [Double] = []
-        var response: DefaultDownloadResponse?
-
-        // When
-        Alamofire.download(urlString)
-            .downloadProgress { progress in
-                progressValues.append(progress.fractionCompleted)
-            }
-            .response { resp in
+        session.download(.get)
+            .responseURL { resp in
                 response = resp
                 expectation.fulfill()
             }
@@ -155,8 +138,69 @@ class DownloadResponseTestCase: BaseTestCase {
         // Then
         XCTAssertNotNil(response?.request)
         XCTAssertNotNil(response?.response)
-        XCTAssertNotNil(response?.temporaryURL)
-        XCTAssertNil(response?.destinationURL)
+        XCTAssertNotNil(response?.fileURL)
+        XCTAssertNil(response?.resumeData)
+        XCTAssertNil(response?.error)
+
+        let url = try XCTUnwrap(response?.value)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    @MainActor
+    func testCancelledDownloadRequest() {
+        // Given
+        let session = stored(Session())
+        let fileURL = randomCachesFileURL
+        let destination: DownloadRequest.Destination = { _, _ in (fileURL, []) }
+
+        let expectation = expectation(description: "Cancelled download request should not download data to file")
+        var response: DownloadResponse<URL?, AFError>?
+
+        // When
+        session.download(.infinite, to: destination)
+            .response { resp in
+                response = resp
+                expectation.fulfill()
+            }
+            .cancel()
+
+        waitForExpectations(timeout: timeout)
+
+        // Then
+        XCTAssertNil(response?.response)
+        XCTAssertNil(response?.fileURL)
+        XCTAssertNotNil(response?.error)
+        XCTAssertEqual(response?.error?.isExplicitlyCancelledError, true)
+    }
+
+    @MainActor
+    func testDownloadRequestWithProgress() {
+        // Given
+        let session = stored(Session())
+        let randomBytes = 1024
+        let endpoint = Endpoint.bytes(randomBytes)
+
+        let expectation = expectation(description: "Bytes download progress should be reported: \(endpoint.url)")
+
+        var progressValues: [Double] = []
+        var response: DownloadResponse<URL?, AFError>?
+
+        // When
+        session.download(endpoint)
+            .downloadProgress(queue: session.rootQueue) { progress in
+                progressValues.append(progress.fractionCompleted)
+            }
+            .response { resp in
+                response = resp
+                expectation.fulfill()
+            }
+
+        waitForExpectations(timeout: timeout)
+
+        // Then
+        XCTAssertNotNil(response?.request)
+        XCTAssertNotNil(response?.response)
+        XCTAssertNotNil(response?.fileURL)
         XCTAssertNil(response?.resumeData)
         XCTAssertNil(response?.error)
 
@@ -174,67 +218,30 @@ class DownloadResponseTestCase: BaseTestCase {
         }
     }
 
+    @MainActor
     func testDownloadRequestWithParameters() {
         // Given
-        let urlString = "https://httpbin.org/get"
-        let parameters = ["foo": "bar"]
-
-        let expectation = self.expectation(description: "Download request should download data to file")
-        var response: DefaultDownloadResponse?
-
-        // When
-        Alamofire.download(urlString, parameters: parameters)
-            .response { resp in
-                response = resp
-                expectation.fulfill()
-            }
-
-        waitForExpectations(timeout: timeout, handler: nil)
-
-        // Then
-        XCTAssertNotNil(response?.request)
-        XCTAssertNotNil(response?.response)
-        XCTAssertNotNil(response?.temporaryURL)
-        XCTAssertNil(response?.destinationURL)
-        XCTAssertNil(response?.resumeData)
-        XCTAssertNil(response?.error)
-
-        if
-            let temporaryURL = response?.temporaryURL,
-            let data = try? Data(contentsOf: temporaryURL),
-            let jsonObject = try? JSONSerialization.jsonObject(with: data, options: JSONSerialization.ReadingOptions(rawValue: 0)),
-            let json = jsonObject as? [String: Any],
-            let args = json["args"] as? [String: String]
-        {
-            XCTAssertEqual(args["foo"], "bar")
-        } else {
-            XCTFail("args parameter in JSON should not be nil")
-        }
-    }
-
-    func testDownloadRequestWithHeaders() {
-        // Given
+        let session = stored(Session())
         let fileURL = randomCachesFileURL
-        let urlString = "https://httpbin.org/get"
-        let headers = ["Authorization": "123456"]
-        let destination: DownloadRequest.DownloadFileDestination = { _, _ in (fileURL, []) }
+        let parameters = ["foo": "bar"]
+        let destination: DownloadRequest.Destination = { _, _ in (fileURL, []) }
 
-        let expectation = self.expectation(description: "Download request should download data to file: \(fileURL)")
-        var response: DefaultDownloadResponse?
+        let expectation = expectation(description: "Download request should download data to file")
+        var response: DownloadResponse<URL?, AFError>?
 
         // When
-        Alamofire.download(urlString, headers: headers, to: destination)
+        session.download(Endpoint.get, parameters: parameters, to: destination)
             .response { resp in
                 response = resp
                 expectation.fulfill()
             }
 
-        waitForExpectations(timeout: timeout, handler: nil)
+        waitForExpectations(timeout: timeout)
 
         // Then
         XCTAssertNotNil(response?.request)
         XCTAssertNotNil(response?.response)
-        XCTAssertNotNil(response?.destinationURL)
+        XCTAssertNotNil(response?.fileURL)
         XCTAssertNil(response?.resumeData)
         XCTAssertNil(response?.error)
 
@@ -242,137 +249,164 @@ class DownloadResponseTestCase: BaseTestCase {
             let data = try? Data(contentsOf: fileURL),
             let jsonObject = try? JSONSerialization.jsonObject(with: data, options: []),
             let json = jsonObject as? [String: Any],
-            let headers = json["headers"] as? [String: String]
-        {
-            XCTAssertEqual(headers["Authorization"], "123456")
+            let args = json["args"] as? [String: String] {
+            XCTAssertEqual(args["foo"], "bar")
         } else {
-            XCTFail("headers parameter in JSON should not be nil")
+            XCTFail("args parameter in JSON should not be nil")
         }
     }
 
+    @MainActor
+    func testDownloadRequestWithHeaders() {
+        // Given
+        let session = stored(Session())
+        let fileURL = randomCachesFileURL
+        let endpoint = Endpoint.get
+        let headers: HTTPHeaders = ["Authorization": "123456"]
+        let destination: DownloadRequest.Destination = { _, _ in (fileURL, []) }
+
+        let expectation = expectation(description: "Download request should download data to file: \(endpoint.url)")
+        var response: DownloadResponse<URL?, AFError>?
+
+        // When
+        session.download(endpoint, headers: headers, to: destination)
+            .response { resp in
+                response = resp
+                expectation.fulfill()
+            }
+
+        waitForExpectations(timeout: timeout)
+
+        // Then
+        XCTAssertNotNil(response?.request)
+        XCTAssertNotNil(response?.response)
+        XCTAssertNotNil(response?.fileURL)
+        XCTAssertNil(response?.resumeData)
+        XCTAssertNil(response?.error)
+
+        guard let data = try? Data(contentsOf: fileURL),
+              let response = try? JSONDecoder().decode(TestResponse.self, from: data) else {
+            XCTFail("headers parameter in JSON should not be nil")
+            return
+        }
+
+        XCTAssertEqual(response.headers["Authorization"], "123456")
+    }
+
+    @MainActor
     func testThatDownloadingFileAndMovingToDirectoryThatDoesNotExistThrowsError() {
         // Given
+        let session = stored(Session())
         let fileURL = testDirectoryURL.appendingPathComponent("some/random/folder/test_output.json")
 
-        let expectation = self.expectation(description: "Download request should download data but fail to move file")
-        var response: DefaultDownloadResponse?
+        let expectation = expectation(description: "Download request should download data but fail to move file")
+        var response: DownloadResponse<URL?, AFError>?
 
         // When
-        Alamofire.download("https://httpbin.org/get", to: { _, _ in (fileURL, [])})
+        session.download(.get, to: { _, _ in (fileURL, []) })
             .response { resp in
                 response = resp
                 expectation.fulfill()
             }
 
-        waitForExpectations(timeout: timeout, handler: nil)
+        waitForExpectations(timeout: timeout)
 
         // Then
         XCTAssertNotNil(response?.request)
         XCTAssertNotNil(response?.response)
-        XCTAssertNotNil(response?.temporaryURL)
-        XCTAssertNotNil(response?.destinationURL)
+        XCTAssertNil(response?.fileURL)
         XCTAssertNil(response?.resumeData)
         XCTAssertNotNil(response?.error)
-
-        if let error = response?.error as? CocoaError {
-            XCTAssertEqual(error.code, .fileNoSuchFile)
-        } else {
-            XCTFail("error should not be nil")
-        }
+        XCTAssertEqual((response?.error?.underlyingError as? CocoaError)?.code, .fileNoSuchFile)
     }
 
+    @MainActor
     func testThatDownloadOptionsCanCreateIntermediateDirectoriesPriorToMovingFile() {
         // Given
+        let session = stored(Session())
         let fileURL = testDirectoryURL.appendingPathComponent("some/random/folder/test_output.json")
 
-        let expectation = self.expectation(description: "Download request should download data to file: \(fileURL)")
-        var response: DefaultDownloadResponse?
+        let expectation = expectation(description: "Download request should download data to file: \(fileURL)")
+        var response: DownloadResponse<URL?, AFError>?
 
         // When
-        Alamofire.download("https://httpbin.org/get", to: { _, _ in (fileURL, [.createIntermediateDirectories])})
+        session.download(.get, to: { _, _ in (fileURL, [.createIntermediateDirectories]) })
             .response { resp in
                 response = resp
                 expectation.fulfill()
             }
 
-        waitForExpectations(timeout: timeout, handler: nil)
+        waitForExpectations(timeout: timeout)
 
         // Then
         XCTAssertNotNil(response?.request)
         XCTAssertNotNil(response?.response)
-        XCTAssertNotNil(response?.temporaryURL)
-        XCTAssertNotNil(response?.destinationURL)
+        XCTAssertNotNil(response?.fileURL)
         XCTAssertNil(response?.resumeData)
         XCTAssertNil(response?.error)
     }
 
-    func testThatDownloadingFileAndMovingToDestinationThatIsOccupiedThrowsError() {
-        do {
-            // Given
-            let directoryURL = testDirectoryURL.appendingPathComponent("some/random/folder")
-            let directoryCreated = FileManager.createDirectory(at: directoryURL)
-
-            let fileURL = directoryURL.appendingPathComponent("test_output.json")
-            try "random_data".write(to: fileURL, atomically: true, encoding: .utf8)
-
-            let expectation = self.expectation(description: "Download should complete but fail to move file")
-            var response: DefaultDownloadResponse?
-
-            // When
-            Alamofire.download("https://httpbin.org/get", to: { _, _ in (fileURL, [])})
-                .response { resp in
-                    response = resp
-                    expectation.fulfill()
-                }
-
-            waitForExpectations(timeout: timeout, handler: nil)
-
-            // Then
-            XCTAssertTrue(directoryCreated)
-
-            XCTAssertNotNil(response?.request)
-            XCTAssertNotNil(response?.response)
-            XCTAssertNotNil(response?.temporaryURL)
-            XCTAssertNotNil(response?.destinationURL)
-            XCTAssertNil(response?.resumeData)
-            XCTAssertNotNil(response?.error)
-
-            if let error = response?.error as? CocoaError {
-                XCTAssertEqual(error.code, .fileWriteFileExists)
-            } else {
-                XCTFail("error should not be nil")
-            }
-        } catch {
-            XCTFail("Test encountered unexpected error: \(error)")
-        }
-    }
-
-    func testThatDownloadOptionsCanRemovePreviousFilePriorToMovingFile() {
+    @MainActor
+    func testThatDownloadingFileAndMovingToDestinationThatIsOccupiedThrowsError() throws {
         // Given
+        let session = stored(Session())
         let directoryURL = testDirectoryURL.appendingPathComponent("some/random/folder")
         let directoryCreated = FileManager.createDirectory(at: directoryURL)
 
         let fileURL = directoryURL.appendingPathComponent("test_output.json")
+        try "random_data".write(to: fileURL, atomically: true, encoding: .utf8)
 
-        let expectation = self.expectation(description: "Download should complete and move file to URL: \(fileURL)")
-        var response: DefaultDownloadResponse?
+        let expectation = expectation(description: "Download should complete but fail to move file")
+        var response: DownloadResponse<URL?, AFError>?
 
         // When
-        Alamofire.download("https://httpbin.org/get", to: { _, _ in (fileURL, [.removePreviousFile])})
+        session.download(.get, to: { _, _ in (fileURL, []) })
             .response { resp in
                 response = resp
                 expectation.fulfill()
             }
 
-        waitForExpectations(timeout: timeout, handler: nil)
+        waitForExpectations(timeout: timeout)
 
         // Then
         XCTAssertTrue(directoryCreated)
 
         XCTAssertNotNil(response?.request)
         XCTAssertNotNil(response?.response)
-        XCTAssertNotNil(response?.temporaryURL)
-        XCTAssertNotNil(response?.destinationURL)
+        XCTAssertNil(response?.fileURL)
+        XCTAssertNil(response?.resumeData)
+        XCTAssertNotNil(response?.error)
+        XCTAssertEqual((response?.error?.underlyingError as? CocoaError)?.code, .fileWriteFileExists)
+    }
+
+    @MainActor
+    func testThatDownloadOptionsCanRemovePreviousFilePriorToMovingFile() {
+        // Given
+        let session = stored(Session())
+        let directoryURL = testDirectoryURL.appendingPathComponent("some/random/folder")
+        let directoryCreated = FileManager.createDirectory(at: directoryURL)
+
+        let fileURL = directoryURL.appendingPathComponent("test_output.json")
+
+        let expectation = expectation(description: "Download should complete and move file to URL: \(fileURL)")
+        var response: DownloadResponse<URL?, AFError>?
+
+        // When
+        session.download(.get,
+                         to: { _, _ in (fileURL, [.removePreviousFile, .createIntermediateDirectories]) })
+            .response { resp in
+                response = resp
+                expectation.fulfill()
+            }
+
+        waitForExpectations(timeout: timeout)
+
+        // Then
+        XCTAssertTrue(directoryCreated)
+
+        XCTAssertNotNil(response?.request)
+        XCTAssertNotNil(response?.response)
+        XCTAssertNotNil(response?.fileURL)
         XCTAssertNil(response?.resumeData)
         XCTAssertNil(response?.error)
     }
@@ -380,48 +414,131 @@ class DownloadResponseTestCase: BaseTestCase {
 
 // MARK: -
 
-class DownloadResumeDataTestCase: BaseTestCase {
-    let urlString = "https://upload.wikimedia.org/wikipedia/commons/6/69/NASA-HS201427a-HubbleUltraDeepField2014-20140603.jpg"
-
-    func testThatImmediatelyCancelledDownloadDoesNotHaveResumeDataAvailable() {
+final class DownloadRequestEventsTestCase: BaseTestCase {
+    @MainActor
+    func testThatDownloadRequestTriggersAllAppropriateLifetimeEvents() {
         // Given
-        let expectation = self.expectation(description: "Download should be cancelled")
-        var response: DefaultDownloadResponse?
+        let eventMonitor = ClosureEventMonitor()
+        let session = Session(eventMonitors: [eventMonitor])
+
+        let taskDidFinishCollecting = expectation(description: "taskDidFinishCollecting should fire")
+        let didCreateInitialURLRequest = expectation(description: "didCreateInitialURLRequest should fire")
+        let didCreateURLRequest = expectation(description: "didCreateURLRequest should fire")
+        let didCreateTask = expectation(description: "didCreateTask should fire")
+        let didGatherMetrics = expectation(description: "didGatherMetrics should fire")
+        let didComplete = expectation(description: "didComplete should fire")
+        let didWriteData = expectation(description: "didWriteData should fire")
+        let didFinishDownloading = expectation(description: "didFinishDownloading should fire")
+        let didFinishWithResult = expectation(description: "didFinishWithResult should fire")
+        let didCreate = expectation(description: "didCreate should fire")
+        let didFinish = expectation(description: "didFinish should fire")
+        let didResume = expectation(description: "didResume should fire")
+        let didResumeTask = expectation(description: "didResumeTask should fire")
+        let didParseResponse = expectation(description: "didParseResponse should fire")
+        let responseHandler = expectation(description: "responseHandler should fire")
+
+        var wroteData = false
+
+        eventMonitor.taskDidFinishCollectingMetrics = { _, _, _ in taskDidFinishCollecting.fulfill() }
+        eventMonitor.requestDidCreateInitialURLRequest = { _, _ in didCreateInitialURLRequest.fulfill() }
+        eventMonitor.requestDidCreateURLRequest = { _, _ in didCreateURLRequest.fulfill() }
+        eventMonitor.requestDidCreateTask = { _, _ in didCreateTask.fulfill() }
+        eventMonitor.requestDidGatherMetrics = { _, _ in didGatherMetrics.fulfill() }
+        eventMonitor.requestDidCompleteTaskWithError = { _, _, _ in didComplete.fulfill() }
+        eventMonitor.downloadTaskDidWriteData = { _, _, _, _, _ in
+            guard !wroteData else { return }
+
+            wroteData = true
+            didWriteData.fulfill()
+        }
+        eventMonitor.downloadTaskDidFinishDownloadingToURL = { _, _, _ in didFinishDownloading.fulfill() }
+        eventMonitor.requestDidFinishDownloadingUsingTaskWithResult = { _, _, _ in didFinishWithResult.fulfill() }
+        eventMonitor.requestDidCreateDestinationURL = { _, _ in didCreate.fulfill() }
+        eventMonitor.requestDidFinish = { _ in didFinish.fulfill() }
+        eventMonitor.requestDidResume = { _ in didResume.fulfill() }
+        eventMonitor.requestDidResumeTask = { _, _ in didResumeTask.fulfill() }
+        eventMonitor.requestDidParseDownloadResponse = { _, _ in didParseResponse.fulfill() }
 
         // When
-        let download = Alamofire.download(urlString)
-            .response { resp in
-                response = resp
-                expectation.fulfill()
-            }
+        let request = session.download(.get).response { _ in
+            responseHandler.fulfill()
+        }
 
-        download.cancel()
-
-        waitForExpectations(timeout: timeout, handler: nil)
+        waitForExpectations(timeout: timeout)
 
         // Then
-        XCTAssertNotNil(response?.request)
-        XCTAssertNil(response?.response)
-        XCTAssertNil(response?.destinationURL)
-        XCTAssertNil(response?.resumeData)
-        XCTAssertNotNil(response?.error)
-
-        XCTAssertNil(download.resumeData)
+        XCTAssertEqual(request.state, .finished)
     }
 
-    func testThatCancelledDownloadResponseDataMatchesResumeData() {
+    @MainActor
+    func testThatCancelledDownloadRequestTriggersAllAppropriateLifetimeEvents() {
         // Given
-        let expectation = self.expectation(description: "Download should be cancelled")
-        var cancelled = false
+        let eventMonitor = ClosureEventMonitor()
+        let session = Session(startRequestsImmediately: false, eventMonitors: [eventMonitor])
 
-        var response: DefaultDownloadResponse?
+        let taskDidFinishCollecting = expectation(description: "taskDidFinishCollecting should fire")
+        let didCreateInitialURLRequest = expectation(description: "didCreateInitialURLRequest should fire")
+        let didCreateURLRequest = expectation(description: "didCreateURLRequest should fire")
+        let didCreateTask = expectation(description: "didCreateTask should fire")
+        let didGatherMetrics = expectation(description: "didGatherMetrics should fire")
+        let didComplete = expectation(description: "didComplete should fire")
+        let didFinish = expectation(description: "didFinish should fire")
+        let didResume = expectation(description: "didResume should fire")
+        let didResumeTask = expectation(description: "didResumeTask should fire")
+        let didParseResponse = expectation(description: "didParseResponse should fire")
+        let didCancel = expectation(description: "didCancel should fire")
+        let didCancelTask = expectation(description: "didCancelTask should fire")
+        let responseHandler = expectation(description: "responseHandler should fire")
+
+        eventMonitor.taskDidFinishCollectingMetrics = { _, _, _ in taskDidFinishCollecting.fulfill() }
+        eventMonitor.requestDidCreateInitialURLRequest = { _, _ in didCreateInitialURLRequest.fulfill() }
+        eventMonitor.requestDidCreateURLRequest = { _, _ in didCreateURLRequest.fulfill() }
+        eventMonitor.requestDidCreateTask = { _, _ in didCreateTask.fulfill() }
+        eventMonitor.requestDidGatherMetrics = { _, _ in didGatherMetrics.fulfill() }
+        eventMonitor.requestDidCompleteTaskWithError = { _, _, _ in didComplete.fulfill() }
+        eventMonitor.requestDidFinish = { _ in didFinish.fulfill() }
+        eventMonitor.requestDidResume = { _ in didResume.fulfill() }
+        eventMonitor.requestDidParseDownloadResponse = { _, _ in didParseResponse.fulfill() }
+        eventMonitor.requestDidCancel = { _ in didCancel.fulfill() }
+        eventMonitor.requestDidCancelTask = { _, _ in didCancelTask.fulfill() }
 
         // When
-        let download = Alamofire.download(urlString)
-        download.downloadProgress { progress in
+        let request = session.download(.delay(5)).response { _ in
+            responseHandler.fulfill()
+        }
+
+        eventMonitor.requestDidResumeTask = { [unowned request] _, _ in
+            request.cancel()
+            didResumeTask.fulfill()
+        }
+
+        request.resume()
+
+        waitForExpectations(timeout: timeout)
+
+        // Then
+        XCTAssertEqual(request.state, .cancelled)
+    }
+}
+
+// MARK: -
+
+final class DownloadResumeDataTestCase: BaseTestCase {
+    @MainActor
+    func testThatCancelledDownloadRequestDoesNotProduceResumeData() {
+        // Given
+        let session = stored(Session())
+        let expectation = expectation(description: "Download should be cancelled")
+        var cancelled = false
+
+        var response: DownloadResponse<URL?, AFError>?
+
+        // When
+        let download = session.download(.download(10_000_000))
+        download.downloadProgress(queue: session.rootQueue) { [unowned download] progress in
             guard !cancelled else { return }
 
-            if progress.fractionCompleted > 0.1 {
+            if progress.fractionCompleted > 0 {
                 download.cancel()
                 cancelled = true
             }
@@ -431,12 +548,79 @@ class DownloadResumeDataTestCase: BaseTestCase {
             expectation.fulfill()
         }
 
-        waitForExpectations(timeout: timeout, handler: nil)
+        waitForExpectations(timeout: timeout)
 
         // Then
         XCTAssertNotNil(response?.request)
         XCTAssertNotNil(response?.response)
-        XCTAssertNil(response?.destinationURL)
+        XCTAssertNil(response?.fileURL)
+        XCTAssertNotNil(response?.error)
+
+        XCTAssertNil(response?.resumeData)
+        XCTAssertNil(download.resumeData)
+    }
+
+    func testThatDownloadRequestProducesResumeDataOnError() {
+        // Given
+        let session = stored(Session())
+        let expectation = expectation(description: "download complete")
+
+        var response: DownloadResponse<URL?, AFError>?
+
+        // When
+        let download = session.download(.download(produceError: true))
+        download.response { resp in
+            response = resp
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: timeout)
+
+        // Then
+        XCTAssertNotNil(response?.request)
+        XCTAssertNotNil(response?.response)
+        XCTAssertNil(response?.fileURL)
+        XCTAssertNotNil(response?.error)
+
+        XCTAssertNotNil(response?.resumeData)
+        XCTAssertNotNil(download.resumeData)
+        #if !canImport(FoundationNetworking) // If we not using swift-corelibs-foundation.
+        XCTAssertNotNil(download.error?.downloadResumeData)
+        XCTAssertEqual(download.error?.downloadResumeData, response?.resumeData)
+        #endif
+        XCTAssertEqual(response?.resumeData, download.resumeData)
+    }
+
+    @MainActor
+    func testThatCancelledDownloadResponseDataMatchesResumeData() {
+        // Given
+        let session = stored(Session())
+        let expectation = expectation(description: "Download should be cancelled")
+        var cancelled = false
+
+        var response: DownloadResponse<URL?, AFError>?
+
+        // When
+        let download = session.download(.download(10_000_000))
+        download.downloadProgress(queue: session.rootQueue) { [unowned download] progress in
+            guard !cancelled else { return }
+
+            if progress.fractionCompleted > 0 {
+                download.cancel(producingResumeData: true)
+                cancelled = true
+            }
+        }
+        download.response { resp in
+            response = resp
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: timeout)
+
+        // Then
+        XCTAssertNotNil(response?.request)
+        XCTAssertNotNil(response?.response)
+        XCTAssertNil(response?.fileURL)
         XCTAssertNotNil(response?.error)
 
         XCTAssertNotNil(response?.resumeData)
@@ -445,36 +629,38 @@ class DownloadResumeDataTestCase: BaseTestCase {
         XCTAssertEqual(response?.resumeData, download.resumeData)
     }
 
-    func testThatCancelledDownloadResumeDataIsAvailableWithJSONResponseSerializer() {
+    @MainActor
+    func testThatCancelledDownloadResumeDataIsAvailableWithDecodableResponseSerializer() {
         // Given
-        let expectation = self.expectation(description: "Download should be cancelled")
+        let session = stored(Session())
+        let expectation = expectation(description: "Download should be cancelled")
         var cancelled = false
 
-        var response: DownloadResponse<Any>?
+        var response: DownloadResponse<TestResponse, AFError>?
 
         // When
-        let download = Alamofire.download(urlString)
-        download.downloadProgress { progress in
+        let download = session.download(.download(10_000_000))
+        download.downloadProgress(queue: session.rootQueue) { [unowned download] progress in
             guard !cancelled else { return }
 
-            if progress.fractionCompleted > 0.1 {
-                download.cancel()
+            if progress.fractionCompleted > 0 {
+                download.cancel(producingResumeData: true)
                 cancelled = true
             }
         }
-        download.responseJSON { resp in
+        download.responseDecodable(of: TestResponse.self) { resp in
             response = resp
             expectation.fulfill()
         }
 
-        waitForExpectations(timeout: timeout, handler: nil)
+        waitForExpectations(timeout: timeout)
 
         // Then
         XCTAssertNotNil(response?.request)
         XCTAssertNotNil(response?.response)
-        XCTAssertNil(response?.destinationURL)
+        XCTAssertNil(response?.fileURL)
         XCTAssertEqual(response?.result.isFailure, true)
-        XCTAssertNotNil(response?.result.error)
+        XCTAssertNotNil(response?.result.failure)
 
         XCTAssertNotNil(response?.resumeData)
         XCTAssertNotNil(download.resumeData)
@@ -482,20 +668,22 @@ class DownloadResumeDataTestCase: BaseTestCase {
         XCTAssertEqual(response?.resumeData, download.resumeData)
     }
 
+    @MainActor
     func testThatCancelledDownloadCanBeResumedWithResumeData() {
         // Given
-        let expectation1 = self.expectation(description: "Download should be cancelled")
+        let session = stored(Session())
+        let expectation1 = expectation(description: "Download should be cancelled")
         var cancelled = false
 
-        var response1: DownloadResponse<Data>?
+        var response1: DownloadResponse<Data, AFError>?
 
         // When
-        let download = Alamofire.download(urlString)
-        download.downloadProgress { progress in
+        let download = session.download(.download(10_000_000))
+        download.downloadProgress(queue: session.rootQueue) { [unowned download] progress in
             guard !cancelled else { return }
 
-            if progress.fractionCompleted > 0.4 {
-                download.cancel()
+            if progress.fractionCompleted > 0 {
+                download.cancel(producingResumeData: true)
                 cancelled = true
             }
         }
@@ -504,20 +692,20 @@ class DownloadResumeDataTestCase: BaseTestCase {
             expectation1.fulfill()
         }
 
-        waitForExpectations(timeout: timeout, handler: nil)
+        waitForExpectations(timeout: timeout)
 
         guard let resumeData = download.resumeData else {
             XCTFail("resumeData should not be nil")
             return
         }
 
-        let expectation2 = self.expectation(description: "Download should complete")
+        let expectation2 = expectation(description: "Download should complete")
 
         var progressValues: [Double] = []
-        var response2: DownloadResponse<Data>?
+        var response2: DownloadResponse<Data, AFError>?
 
-        Alamofire.download(resumingWith: resumeData)
-            .downloadProgress { progress in
+        session.download(resumingWith: resumeData)
+            .downloadProgress(queue: session.rootQueue) { progress in
                 progressValues.append(progress.fractionCompleted)
             }
             .responseData { resp in
@@ -525,21 +713,368 @@ class DownloadResumeDataTestCase: BaseTestCase {
                 expectation2.fulfill()
             }
 
-        waitForExpectations(timeout: timeout, handler: nil)
+        waitForExpectations(timeout: timeout)
 
         // Then
         XCTAssertNotNil(response1?.request)
         XCTAssertNotNil(response1?.response)
-        XCTAssertNil(response1?.destinationURL)
+        XCTAssertNil(response1?.fileURL)
         XCTAssertEqual(response1?.result.isFailure, true)
-        XCTAssertNotNil(response1?.result.error)
+        XCTAssertNotNil(response1?.result.failure)
 
         XCTAssertNotNil(response2?.response)
-        XCTAssertNotNil(response2?.temporaryURL)
-        XCTAssertNil(response2?.destinationURL)
+        XCTAssertNotNil(response2?.fileURL)
         XCTAssertEqual(response2?.result.isSuccess, true)
-        XCTAssertNil(response2?.result.error)
+        XCTAssertNil(response2?.result.failure)
 
-        progressValues.forEach { XCTAssertGreaterThanOrEqual($0, 0.4) }
+        progressValues.forEach { XCTAssertGreaterThan($0, 0) }
+    }
+
+    @MainActor
+    func testThatCancelledDownloadProducesMatchingResumeData() {
+        // Given
+        let session = stored(Session())
+        let expectation = expectation(description: "Download should be cancelled")
+        var cancelled = false
+        var receivedResumeData: Data?
+        var response: DownloadResponse<URL?, AFError>?
+
+        // When
+        let download = session.download(.download(10_000_000))
+        download.downloadProgress(queue: session.rootQueue) { [unowned download] progress in
+            guard !cancelled else { return }
+
+            if progress.fractionCompleted > 0 {
+                download.cancel { receivedResumeData = $0 }
+                cancelled = true
+            }
+        }
+        download.response { resp in
+            response = resp
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: timeout)
+
+        // Then
+        XCTAssertNotNil(response?.request)
+        XCTAssertNotNil(response?.response)
+        XCTAssertNil(response?.fileURL)
+        XCTAssertNotNil(response?.error)
+
+        XCTAssertNotNil(response?.resumeData)
+        XCTAssertNotNil(download.resumeData)
+
+        XCTAssertEqual(response?.resumeData, download.resumeData)
+        XCTAssertEqual(response?.resumeData, receivedResumeData)
+        XCTAssertEqual(download.resumeData, receivedResumeData)
+    }
+}
+
+// MARK: -
+
+final class DownloadResponseMapTestCase: BaseTestCase {
+    @MainActor
+    func testThatMapTransformsSuccessValue() {
+        // Given
+        let session = stored(Session())
+        let expectation = expectation(description: "request should succeed")
+
+        var response: DownloadResponse<String, AFError>?
+
+        // When
+        session.download(.get, parameters: ["foo": "bar"]).responseDecodable(of: TestResponse.self) { resp in
+            response = resp.map { response in
+                response.args["foo"] ?? "invalid"
+            }
+
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: timeout)
+
+        // Then
+        XCTAssertNotNil(response?.request)
+        XCTAssertNotNil(response?.response)
+        XCTAssertNotNil(response?.fileURL)
+        XCTAssertNil(response?.resumeData)
+        XCTAssertNil(response?.error)
+        XCTAssertEqual(response?.result.success, "bar")
+        XCTAssertNotNil(response?.metrics)
+    }
+
+    @MainActor
+    func testThatMapPreservesFailureError() {
+        // Given
+        let session = stored(Session())
+        let urlString = String.invalidURL
+        let expectation = expectation(description: "request should fail with invalid URL")
+
+        var response: DownloadResponse<String, AFError>?
+
+        // When
+        session.download(urlString, parameters: ["foo": "bar"]).responseDecodable(of: TestResponse.self) { resp in
+            response = resp.map { _ in "ignored" }
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: timeout)
+
+        // Then
+        XCTAssertNotNil(response?.request)
+        XCTAssertNil(response?.response)
+        XCTAssertNil(response?.fileURL)
+        XCTAssertNil(response?.resumeData)
+        XCTAssertNotNil(response?.error)
+        XCTAssertEqual(response?.result.isFailure, true)
+        XCTAssertNotNil(response?.metrics)
+    }
+}
+
+// MARK: -
+
+final class DownloadResponseTryMapTestCase: BaseTestCase {
+    @MainActor
+    func testThatTryMapTransformsSuccessValue() {
+        // Given
+        let session = stored(Session())
+        let expectation = expectation(description: "request should succeed")
+
+        var response: DownloadResponse<String, any Error>?
+
+        // When
+        session.download(.get, parameters: ["foo": "bar"]).responseDecodable(of: TestResponse.self) { resp in
+            response = resp.tryMap { response in
+                response.args["foo"] ?? "invalid"
+            }
+
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: timeout)
+
+        // Then
+        XCTAssertNotNil(response?.request)
+        XCTAssertNotNil(response?.response)
+        XCTAssertNotNil(response?.fileURL)
+        XCTAssertNil(response?.resumeData)
+        XCTAssertNil(response?.error)
+        XCTAssertEqual(response?.result.success, "bar")
+        XCTAssertNotNil(response?.metrics)
+    }
+
+    @MainActor
+    func testThatTryMapCatchesTransformationError() {
+        // Given
+        let session = stored(Session())
+        struct TransformError: Error {}
+
+        let expectation = expectation(description: "request should succeed")
+
+        var response: DownloadResponse<String, any Error>?
+
+        // When
+        session.download(.get, parameters: ["foo": "bar"]).responseDecodable(of: TestResponse.self) { resp in
+            response = resp.tryMap { _ in
+                throw TransformError()
+            }
+
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: timeout)
+
+        // Then
+        XCTAssertNotNil(response?.request)
+        XCTAssertNotNil(response?.response)
+        XCTAssertNotNil(response?.fileURL)
+        XCTAssertNil(response?.resumeData)
+        if let error = response?.result.failure {
+            XCTAssertTrue(error is TransformError)
+        } else {
+            XCTFail("flatMap should catch the transformation error")
+        }
+
+        XCTAssertNotNil(response?.metrics)
+    }
+
+    @MainActor
+    func testThatTryMapPreservesFailureError() {
+        // Given
+        let session = stored(Session())
+        let urlString = String.invalidURL
+        let expectation = expectation(description: "request should fail with 404")
+
+        var response: DownloadResponse<String, any Error>?
+
+        // When
+        session.download(urlString, parameters: ["foo": "bar"]).responseDecodable(of: TestResponse.self) { resp in
+            response = resp.tryMap { _ in "ignored" }
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: timeout)
+
+        // Then
+        XCTAssertNotNil(response?.request)
+        XCTAssertNil(response?.response)
+        XCTAssertNil(response?.fileURL)
+        XCTAssertNil(response?.resumeData)
+        XCTAssertNotNil(response?.error)
+        XCTAssertEqual(response?.result.isFailure, true)
+        XCTAssertNotNil(response?.metrics)
+    }
+}
+
+final class DownloadResponseMapErrorTestCase: BaseTestCase {
+    @MainActor
+    func testThatMapErrorTransformsFailureValue() {
+        // Given
+        let session = stored(Session())
+        let urlString = String.invalidURL
+        let expectation = expectation(description: "request should not succeed")
+
+        var response: DownloadResponse<TestResponse, TestError>?
+
+        // When
+        session.download(urlString).responseDecodable(of: TestResponse.self) { resp in
+            response = resp.mapError { error in
+                TestError.error(error: error)
+            }
+
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: timeout)
+
+        // Then
+        XCTAssertNotNil(response?.request)
+        XCTAssertNil(response?.response)
+        XCTAssertNil(response?.fileURL)
+        XCTAssertNil(response?.resumeData)
+        XCTAssertNotNil(response?.error)
+        XCTAssertEqual(response?.result.isFailure, true)
+
+        guard let error = response?.error, case .error = error else { XCTFail(); return }
+
+        XCTAssertNotNil(response?.metrics)
+    }
+
+    @MainActor
+    func testThatMapErrorPreservesSuccessValue() {
+        // Given
+        let session = stored(Session())
+        let expectation = expectation(description: "request should succeed")
+
+        var response: DownloadResponse<Data, TestError>?
+
+        // When
+        session.download(.get).responseData { resp in
+            response = resp.mapError { TestError.error(error: $0) }
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: timeout)
+
+        // Then
+        XCTAssertNotNil(response?.request)
+        XCTAssertNotNil(response?.response)
+        XCTAssertNotNil(response?.fileURL)
+        XCTAssertNil(response?.resumeData)
+        XCTAssertEqual(response?.result.isSuccess, true)
+        XCTAssertNotNil(response?.metrics)
+    }
+}
+
+// MARK: -
+
+final class DownloadResponseTryMapErrorTestCase: BaseTestCase {
+    @MainActor
+    func testThatTryMapErrorPreservesSuccessValue() {
+        // Given
+        let session = stored(Session())
+        let expectation = expectation(description: "request should succeed")
+
+        var response: DownloadResponse<Data, any Error>?
+
+        // When
+        session.download(.get).responseData { resp in
+            response = resp.tryMapError { TestError.error(error: $0) }
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: timeout)
+
+        // Then
+        XCTAssertNotNil(response?.request)
+        XCTAssertNotNil(response?.response)
+        XCTAssertNotNil(response?.fileURL)
+        XCTAssertNil(response?.resumeData)
+        XCTAssertNil(response?.error)
+        XCTAssertEqual(response?.result.isSuccess, true)
+        XCTAssertNotNil(response?.metrics)
+    }
+
+    @MainActor
+    func testThatTryMapErrorCatchesTransformationError() {
+        // Given
+        let session = stored(Session())
+        let urlString = String.invalidURL
+        let expectation = expectation(description: "request should fail")
+
+        var response: DownloadResponse<Data, any Error>?
+
+        // When
+        session.download(urlString).responseData { resp in
+            response = resp.tryMapError { _ in try TransformationError.error.alwaysFails() }
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: timeout)
+
+        // Then
+        XCTAssertNotNil(response?.request)
+        XCTAssertNil(response?.response)
+        XCTAssertNil(response?.fileURL)
+        XCTAssertNil(response?.resumeData)
+        XCTAssertNotNil(response?.error)
+        XCTAssertEqual(response?.result.isFailure, true)
+
+        if let error = response?.result.failure {
+            XCTAssertTrue(error is TransformationError)
+        } else {
+            XCTFail("flatMapError should catch the transformation error")
+        }
+
+        XCTAssertNotNil(response?.metrics)
+    }
+
+    @MainActor
+    func testThatTryMapErrorTransformsError() {
+        // Given
+        let session = stored(Session())
+        let urlString = String.invalidURL
+        let expectation = expectation(description: "request should fail")
+
+        var response: DownloadResponse<Data, any Error>?
+
+        // When
+        session.download(urlString).responseData { resp in
+            response = resp.tryMapError { TestError.error(error: $0) }
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: timeout)
+
+        // Then
+        XCTAssertNotNil(response?.request)
+        XCTAssertNil(response?.response)
+        XCTAssertNil(response?.fileURL)
+        XCTAssertNil(response?.resumeData)
+        XCTAssertNotNil(response?.error)
+        XCTAssertEqual(response?.result.isFailure, true)
+        guard let error = response?.error, case TestError.error = error else { XCTFail(); return }
+
+        XCTAssertNotNil(response?.metrics)
     }
 }
